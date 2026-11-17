@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeCane AI - 데이터 기반 보행 위험도 예측 & 장애물 진단 시스템</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <style>
+    :root {
+      --bg-main: #0f172a;
+      --bg-card: #1e293b;
+      --bg-inner: #020617;
+      --border: #334155;
+      --blue: #38bdf8;
+      --yellow: #fde047;
+      --red: #ef4444;
+      --orange: #f59e0b;
+      --green: #10b981;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Malgun Gothic', sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 20px 16px 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .wrapper {
+      width: 100%;
+      max-width: 600px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    header { text-align: center; }
+    .badge {
+      display: inline-block;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--blue);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 999px;
+      margin-bottom: 8px;
+    }
+    header h1 { font-size: 1.45rem; font-weight: 800; margin-bottom: 6px; }
+    header h1 span { color: var(--blue); }
+    header p { font-size: 0.88rem; color: var(--muted); }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .card-title { font-size: 0.95rem; font-weight: 700; }
+    .pill {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 6px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--blue);
+    }
+
+    /* 1. 시각·촉각(패턴) 통합 경고 디스플레이 */
+    .alert-display {
+      background: var(--bg-inner);
+      border: 2px solid var(--blue);
+      border-radius: 12px;
+      padding: 16px;
+      transition: all 0.25s ease;
+    }
+
+    .alert-top {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .alert-msg {
+      font-size: 1.12rem;
+      font-weight: 800;
+      color: var(--yellow);
+      margin-bottom: 10px;
+    }
+
+    .pattern-bar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    @keyframes blinkFast {
+      0%, 100% { opacity: 1; transform: scale(1.2); }
+      50% { opacity: 0.2; transform: scale(0.9); }
+    }
+    .blink-danger { animation: blinkFast 0.45s infinite; background: var(--red) !important; }
+
+    /* 2. 공공데이터 기반 AI 보행 위험도 예측기 */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    select, input[type="range"] {
+      width: 100%;
+    }
+
+    select {
+      background: var(--bg-inner);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 9px 10px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+    }
+
+    .risk-meter-box {
+      background: var(--bg-inner);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-top: 8px;
+    }
+
+    .risk-score-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+
+    .risk-score-num { font-size: 1.5rem; font-weight: 900; color: var(--blue); }
+    .meter-bg {
+      width: 100%;
+      height: 10px;
+      background: #334155;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .meter-fill {
+      height: 100%;
+      width: 35%;
+      background: var(--blue);
+      transition: width 0.3s ease, background-color 0.3s ease;
+    }
+
+    /* 3. 이미지 업로드 기반 AI 객체 탐지 (권한 불필요) */
+    .upload-zone {
+      border: 1.5px dashed #475569;
+      background: var(--bg-inner);
+      border-radius: 12px;
+      padding: 14px;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 8px;
+    }
+
+    .btn {
+      padding: 10px 14px;
+      border-radius: 9px;
+      border: none;
+      font-size: 0.84rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-primary { background: var(--blue); color: #0f172a; }
+    .btn-sub { background: #334155; color: var(--text); }
+    .btn:hover { opacity: 0.9; }
+
+    .canvas-wrap {
+      position: relative;
+      width: 100%;
+      background: var(--bg-inner);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 180px;
+    }
+
+    canvas { max-width: 100%; height: auto; display: block; }
+
+    .detection-list {
+      margin-top: 10px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    @media (max-width: 460px) {
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="wrapper">
+    <header>
+      <div class="badge">AI 융합 창업 프로토타입 · 무권한 즉시 실행 버전</div>
+      <h1>🦯 <span>SafeCane AI</span> 보행 위험 진단 시스템</h1>
+      <p>공공데이터 기반 횡단보도 위험 예측 및 상체 장애물 비전 탐지</p>
+    </header>
+
+    <!-- 1. 실시간 고대비 시각·진동패턴 경고 모니터 -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">🚨 스마트 지팡이 캡 실시간 경보 상태</div>
+        <span class="pill" id="alertLevelBadge">정상 보행</span>
+      </div>
+      <div class="alert-display" id="alertBox">
+        <div class="alert-top">
+          <span id="alertModeText">대기 모드</span>
+          <span id="hapticPatternText">경보 패턴: 대기</span>
+        </div>
+        <div class="alert-msg" id="alertMessage">
+          아래 조건을 변경하거나 도로 사진을 선택하면 AI가 위험도를 즉시 판별합니다.
+        </div>
+        <div class="pattern-bar">
+          <div class="pulse-dot" id="pulseDot"></div>
+          <span id="actionGuide">지팡이 캡 LED 및 저주파 맥동 패턴 정상 대기 중</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. 공공 통계 데이터 기반 AI 보행 위험도 예측 모델 -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">📊 공공데이터 기반 횡단보도 위험도 예측</div>
+        <span class="pill">실제 통계 반영</span>
+      </div>
+
+      <div class="form-grid">
+        <div>
+          <label for="regionSelect">보행 지역 (음향신호기 설치율 데이터)</label>
+          <select id="regionSelect" onchange="calculateRisk()">
+            <option value="74.13">세종특별자치시 (설치율 74.13%)</option>
+            <option value="66.08" selected>서울특별시 (설치율 66.08%)</option>
+            <option value="34.00">전국 평균 수준 (설치율 34.00%)</option>
+            <option value="8.14">대구광역시 (설치율 8.14%)</option>
+            <option value="7.80">울산광역시 (설치율 7.80%)</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="crosswalkType">횡단보도 인프라 유형</label>
+          <select id="crosswalkType" onchange="calculateRisk()">
+            <option value="iot">지능형 IoT 음향신호기 설치 구역</option>
+            <option value="normal_sound">일반 음향신호기 설치 구역</option>
+            <option value="no_sound" selected>신호등만 있음 (음향신호기 미설치)</option>
+            <option value="unsignalized">비신호 횡단보도 (신호등 없음)</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="tofRange">상체 높이 장애물 거리 (ToF 센서): <strong id="tofLabel" style="color:var(--blue)">2.2m</strong></label>
+          <input type="range" id="tofRange" min="0.5" max="4.0" step="0.1" value="2.2" oninput="calculateRisk()" />
+        </div>
+
+        <div>
+          <label for="ageSensory">사용자 촉각 감도 (연령 보정 계수)</label>
+          <select id="ageSensory" onchange="calculateRisk()">
+            <option value="1.0">청·장년층 (표준 진동 인지 가능)</option>
+            <option value="1.35" selected>70대 이상 고령층 (진동 감각 저하 보정)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="risk-meter-box">
+        <div class="risk-score-row">
+          <span style="font-size:0.84rem; color:var(--muted);">AI 종합 보행 위험 지수</span>
+          <span class="risk-score-num" id="riskScoreText">58점 (주의)</span>
+        </div>
+        <div class="meter-bg">
+          <div class="meter-fill" id="riskMeterFill"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 사진 업로드 & 샘플 이미지 기반 AI 비전 탐지 (카메라 권한 불필요) -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">🖼️ 도로·장애물 이미지 AI 객체 인식 (COCO-SSD)</div>
+        <span class="pill" id="modelStatus">AI 준비 완료</span>
+      </div>
+
+      <div class="upload-zone">
+        <p style="font-size: 0.83rem; color: var(--muted);">
+          카메라 권한 없이 PC/스마트폰의 <strong>도로·차량·신호등 사진</strong>을 올리거나 샘플 시나리오를 실행하세요.
+        </p>
+        <div class="btn-group">
+          <label class="btn btn-primary" style="display:inline-block; margin:0; color:#0f172a;">
+            📁 내 사진 파일 업로드
+            <input type="file" id="imageInput" accept="image/*" style="display:none;" onchange="handleImageUpload(event)" />
+          </label>
+          <button class="btn btn-sub" onclick="drawSampleScene('upper')">🚧 샘플1: 상체 돌출 간판</button>
+          <button class="btn btn-sub" onclick="drawSampleScene('crosswalk')">🚗 샘플2: 비신호 차량 접근</button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="resultCanvas" width="520" height="280"></canvas>
+      </div>
+      <div class="detection-list" id="detectionSummary">
+        분석 결과: 사진 파일을 업로드하거나 상단 샘플 시나리오 버튼을 클릭하세요.
+      </div>
+    </section>
+  </div>
+
+  <script>
+    let cocoModel = null;
+
+    // 페이지 로드 시 COCO-SSD 모델 백그라운드 준비
+    window.addEventListener('DOMContentLoaded', async () => {
+      calculateRisk();
+      drawInitialCanvas();
+      try {
+        document.getElementById('modelStatus').textContent = 'AI 모델 로딩 중...';
+        cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        document.getElementById('modelStatus').textContent = 'AI 모델 활성 (100%)';
+      } catch (e) {
+        document.getElementById('modelStatus').textContent = '시뮬레이션 엔진 활성';
+      }
+    });
+
+    // 1. 공공통계 + ToF 거리 + 노화 보정 기반 보행 위험도 예측 알고리즘
+    function calculateRisk() {
+      const installRate = parseFloat(document.getElementById('regionSelect').value);
+      const cwType = document.getElementById('crosswalkType').value;
+      const tofDist = parseFloat(document.getElementById('tofRange').value);
+      const ageFactor = parseFloat(document.getElementById('ageSensory').value);
+
+      document.getElementById('tofLabel').textContent = `${tofDist.toFixed(1)}m`;
+
+      // 기본 인프라 위험 점수 산출
+      let infraScore = 0;
+      if (cwType === 'iot') infraScore = 10;
+      else if (cwType === 'normal_sound') infraScore = 20;
+      else if (cwType === 'no_sound') infraScore = 42;
+      else if (cwType === 'unsignalized') infraScore = 55;
+
+      // 지역 음향신호기 미설치율 가중치 반영
+      const regionPenalty = ((100 - installRate) / 100) * 20;
+
+      // 상체 장애물 거리(ToF) 위험도
+      let obstacleScore = 0;
+      if (tofDist <= 1.2) obstacleScore = 45;
+      else if (tofDist <= 2.0) obstacleScore = 25;
+      else obstacleScore = 5;
+
+      let totalRisk = Math.min(100, Math.round((infraScore + regionPenalty + obstacleScore) * (ageFactor === 1.35 ? 1.12 : 1.0)));
+
+      // UI 업데이트
+      const scoreText = document.getElementById('riskScoreText');
+      const meterFill = document.getElementById('riskMeterFill');
+      const alertBox = document.getElementById('alertBox');
+      const alertBadge = document.getElementById('alertLevelBadge');
+      const alertMsg = document.getElementById('alertMessage');
+      const patternText = document.getElementById('hapticPatternText');
+      const actionGuide = document.getElementById('actionGuide');
+      const pulseDot = document.getElementById('pulseDot');
+
+      meterFill.style.width = `${totalRisk}%`;
+
+      if (totalRisk >= 75) {
+        scoreText.textContent = `${totalRisk}점 (고위험 · 즉시 정지)`;
+        scoreText.style.color = '#ef4444';
+        meterFill.style.backgroundColor = '#ef4444';
+        alertBox.style.borderColor = '#ef4444';
+        alertBadge.textContent = '긴급 위험 경고';
+        alertBadge.style.color = '#ef4444';
+        alertBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+        alertMsg.textContent = `🚨 고위험 구간(${totalRisk}점): 전방 상체 장애물(${tofDist.toFixed(1)}m) 및 음향신호 미비! 즉시 멈추세요.`;
+        patternText.textContent = '경보 패턴: 강렬 3연속 맥동 + 적색 점멸';
+        actionGuide.textContent = '고령자 촉각 저하 보정: 최대 강도 저주파 맥동 및 시각 경고 활성화';
+        pulseDot.classList.add('blink-danger');
+      } else if (totalRisk >= 45) {
+        scoreText.textContent = `${totalRisk}점 (주의 필요)`;
+        scoreText.style.color = '#f59e0b';
+        meterFill.style.backgroundColor = '#f59e0b';
+        alertBox.style.borderColor = '#f59e0b';
+        alertBadge.textContent = '보행 주의';
+        alertBadge.style.color = '#f59e0b';
+        alertBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+        alertMsg.textContent = `⚠️ 주의 구간(${totalRisk}점): 음향신호기 미설치/사각지대 구간입니다. 서행하며 전방을 확인하세요.`;
+        patternText.textContent = '경보 패턴: 1초 간격 단속 알림';
+        actionGuide.textContent = '지팡이 캡 상단 센서 집중 감시 모드 작동 중';
+        pulseDot.classList.remove('blink-danger');
+        pulseDot.style.background = '#f59e0b';
+      } else {
+        scoreText.textContent = `${totalRisk}점 (안전 보행)`;
+        scoreText.style.color = '#10b981';
+        meterFill.style.backgroundColor = '#10b981';
+        alertBox.style.borderColor = '#10b981';
+        alertBadge.textContent = '안전 구간';
+        alertBadge.style.color = '#10b981';
+        alertBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+        alertMsg.textContent = `✅ 안전 구간(${totalRisk}점): 보행 인프라 양호 및 전방 상체 장애물이 없습니다.`;
+        patternText.textContent = '경보 패턴: 정상 대기';
+        actionGuide.textContent = '표준 감시 모드 유지 중';
+        pulseDot.classList.remove('blink-danger');
+        pulseDot.style.background = '#10b981';
+      }
+    }
+
+    // 2. 사용자 이미지 파일 업로드 분석 (권한 100% 불필요)
+    function handleImageUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = async function() {
+          const canvas = document.getElementById('resultCanvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+
+          document.getElementById('detectionSummary').textContent = 'AI가 업로드된 이미지를 분석하고 있습니다...';
+
+          if (cocoModel) {
+            const predictions = await cocoModel.detect(img);
+            renderDetections(ctx, canvas.width, canvas.height, predictions);
+          } else {
+            document.getElementById('detectionSummary').textContent = '모델 로딩 중입니다. 잠시 후 다시 시도해 주세요.';
+          }
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function renderDetections(ctx, w, h, predictions) {
+      const koNames = {
+        'person': '보행자', 'car': '승용차', 'truck': '트럭', 'bus': '버스',
+        'traffic light': '신호등', 'bicycle': '자전거', 'motorcycle': '오토바이',
+        'chair': '돌출 장애물', 'potted plant': '가로수·화분'
+      };
+
+      if (predictions.length === 0) {
+        document.getElementById('detectionSummary').textContent = '탐지된 주요 도로 위험 객체가 없습니다.';
+        return;
+      }
+
+      const detectedLabels = [];
+      predictions.forEach(pred => {
+        if (pred.score < 0.45) return;
+        const [x, y, bw, bh] = pred.bbox;
+        const centerY = (y + bh / 2) / h;
+        const isUpper = centerY < 0.55;
+        const color = isUpper ? '#ef4444' : '#38bdf8';
+        const label = `${isUpper ? '[상체위험] ' : ''}${koNames[pred.class] || pred.class} (${Math.round(pred.score * 100)}%)`;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(3, w * 0.006);
+        ctx.strokeRect(x, y, bw, bh);
+
+        ctx.fillStyle = color;
+        ctx.font = `bold ${Math.max(14, Math.round(w * 0.025))}px sans-serif`;
+        ctx.fillText(label, x, y > 22 ? y - 6 : y + 20);
+
+        detectedLabels.push(label);
+      });
+
+      document.getElementById('detectionSummary').textContent =
+        `AI 탐지 완료 (${detectedLabels.length}건): ` + detectedLabels.join(', ');
+    }
+
+    // 3. 샘플 시나리오 캔버스 렌더링 (테스트·발표용)
+    function drawInitialCanvas() {
+      const canvas = document.getElementById('resultCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#020617';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#64748b';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('상단 [내 사진 파일 업로드] 또는 [샘플 버튼]을 눌러보세요', canvas.width / 2, canvas.height / 2);
+    }
+
+    function drawSampleScene(type) {
+      const canvas = document.getElementById('resultCanvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 520;
+      canvas.height = 280;
+
+      // 배경 도로 그래픽
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, 520, 280);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 170, 520, 110);
+
+      // 상체 위험 임계선
+      ctx.strokeStyle = 'rgba(239,68,68,0.6)';
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, 150);
+      ctx.lineTo(520, 150);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (type === 'upper') {
+        // 돌출 간판 시뮬레이션
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(160, 45, 190, 75);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(155, 40, 200, 85);
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('[상체위험] 돌출 간판 감지 (높이 1.65m · 신뢰도 94%)', 155, 32);
+
+        document.getElementById('tofRange').value = 1.1;
+        calculateRisk();
+        document.getElementById('detectionSummary').textContent =
+          'AI 판별 결과: 지팡이 바닥 탐지 사각지대(상체 높이)에 돌출 간판이 탐지되어 긴급 정지 경보를 발동했습니다.';
+      } else {
+        // 비신호 횡단보도 차량 접근 시뮬레이션
+        ctx.fillStyle = '#f8fafc';
+        for (let i = 40; i < 480; i += 70) {
+          ctx.fillRect(i, 200, 45, 55);
+        }
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(310, 115, 140, 65);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(305, 110, 150, 75);
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('[접근위험] 비신호 구역 접근 차량 (신뢰도 91%)', 240, 100);
+
+        document.getElementById('crosswalkType').value = 'unsignalized';
+        document.getElementById('tofRange').value = 1.4;
+        calculateRisk();
+        document.getElementById('detectionSummary').textContent =
+          'AI 판별 결과: 음향신호기·보행신호등 없는 비신호 횡단보도에서 측면 접근 차량이 탐지되어 보행 대기 경보를 발동했습니다.';
+      }
+    }
+  </script>
+</body>
+</html>
